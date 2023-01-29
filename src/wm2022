@@ -1,0 +1,11 @@
+
+config settings 'wm_agent'
+	option topic 'wm2022'
+	option period '3'
+	option server 'test.mosquitto.org'
+	option user ''
+	option password ''
+	option use_tls '0'
+	option port '1883'
+	option enabled '1'
+

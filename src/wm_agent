@@ -1,0 +1,141 @@
+#!/usr/bin/env lua
+
+require "ubus"
+require "uloop"
+require "uci"
+mqtt = require("mosquitto")
+
+uloop.init()
+
+local conn = ubus.connect()
+if not conn then
+	error("Failed to connect to ubus")
+end
+
+ucfg = uci.cursor()
+
+cfg = {}
+cfg.period = ucfg:get("wm2022", "wm_agent", "period")
+cfg.server = ucfg:get("wm2022", "wm_agent", "server")
+cfg.port = ucfg:get("wm2022", "wm_agent", "port")
+cfg.topic = ucfg:get("wm2022", "wm_agent", "topic")
+cfg.enabled = ucfg:get("wm2022", "wm_agent", "enabled")
+cfg.user = ucfg:get("wm2022", "wm_agent", "user")
+cfg.password = ucfg:get("wm2022", "wm_agent", "password")
+cfg.use_tls = ucfg:get("wm2022", "wm_agent", "use_tls")
+
+mqtt = require("mosquitto")
+mq = mqtt.new()
+mq_message = ""
+
+mq.ON_CONNECT = function()
+	mq:publish(cfg.topic, mq_message)
+end
+
+mq.ON_PUBLISH = function()
+	mq:disconnect()
+end
+
+local wm_agent_params = {
+	wm_agent = {
+		set_period = {
+			function(req, msg)
+				print("wm_agent setting period to " .. tostring(msg["period"]))
+				ucfg:set("wm2022", "wm_agent", "period", msg["period"])
+				ucfg:commit("wm2022")
+				cfg.period = msg["period"]
+			end, { period = ubus.INT32 }
+		},
+		set_server = {
+			function(req, msg)
+				print("wm_agent setting server to " .. msg["server"])
+				ucfg:set("wm2022", "wm_agent", "server", msg["server"])
+				ucfg:commit("wm2022")
+				cfg.server = msg["server"]
+			end, { server = ubus.STRING }
+		},
+		set_port = {
+			function(req, msg)
+				print("wm_agent setting port to " .. msg["port"])
+				ucfg:set("wm2022", "wm_agent", "port", msg["port"])
+				ucfg:commit("wm2022")
+				cfg.port = msg["port"]
+			end, { port = ubus.STRING }
+		},
+		set_topic = {
+			function(req, msg)
+				print("wm_agent setting topic to " .. msg["topic"])
+				ucfg:set("wm2022", "wm_agent", "topic", msg["topic"])
+				ucfg:commit("wm2022")
+				cfg.topic = msg["topic"]
+			end, { topic = ubus.STRING }
+		},
+		set_user = {
+			function(req, msg)
+				print("wm_agent setting user to " .. msg["user"])
+				ucfg:set("wm2022", "wm_agent", "user", msg["user"])
+				ucfg:commit("wm2022")
+				cfg.user = msg["user"]
+			end, { user = ubus.STRING }
+		},
+		set_password = {
+			function(req, msg)
+				print("wm_agent setting password to " .. msg["password"])
+				ucfg:set("wm2022", "wm_agent", "password", msg["password"])
+				ucfg:commit("wm2022")
+				cfg.password = msg["password"]
+
+			end, { password = ubus.STRING }
+		},
+		use_tls = {
+			function(req, msg)
+				print("wm_agent setting enable to " .. msg["flag"])
+				ucfg:set("wm2022", "wm_agent", "use_tls", msg["flag"])
+				ucfg:commit("wm2022")
+				cfg.use_tls = msg["flag"]
+			end, { flag = ubus.INT8 }
+		},
+		enable = {
+			function(req, msg)
+				print("wm_agent setting enable to " .. msg["flag"])
+				ucfg:set("wm2022", "wm_agent", "enabled", msg["flag"])
+				ucfg:commit("wm2022")
+				cfg.enabled = msg["flag"]
+			end, { flag = ubus.INT8 }
+		}
+	}
+}
+
+local mqtt_timer
+function mq_worker()
+	-- getting system info (collectd for poors)
+	handle = io.popen("uptime")
+	uptime = handle:read("*a")
+	handle:close()
+	handle = io.popen("free")
+	free = handle:read("*a")
+	handle:close()
+	mq_message = uptime .. free
+
+	-- sending to mqtt
+	if (cfg.enable=="1") then
+		if ((cfg.user ~= nil) and (cfg.password ~= nil)) then
+			mq:login_set(cfg.user, cfg.password)
+		end
+		if (cfg.use_tls == "1") then
+			-- setting MOSQ_OPT_TLS_USE_OS_CERTS=1
+			mq:option(13, 1)
+		end
+
+		mq:connect(cfg.server, cfg.port)
+		mq:loop_forever()
+	end
+	mqtt_timer:set(cfg.period * 1000)
+end
+
+mqtt_timer = uloop.timer(mq_worker)
+mqtt_timer:set(cfg.period * 1000)
+
+conn:add(wm_agent_params)
+
+uloop.run()
